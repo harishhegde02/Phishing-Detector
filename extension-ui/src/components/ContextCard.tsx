@@ -29,8 +29,19 @@ export function ContextCard({ detailed = false }: { detailed?: boolean }) {
           }, (response) => {
              if (response?.result) {
                setRiskData(response.result);
+               setLoading(false);
+             } else {
+               // Cache miss? Trigger fresh analysis
+               chrome.runtime.sendMessage({
+                  type: 'CHECK_RISK',
+                  payload: { url: tab.url }
+               }, (scanResponse) => {
+                  if (scanResponse?.success) {
+                      setRiskData(scanResponse.data);
+                  }
+                  setLoading(false);
+               });
              }
-             setLoading(false);
           });
         }
       });

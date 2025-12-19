@@ -2,15 +2,41 @@ import React from 'react';
 import { cn } from '@/lib/utils';
 import { Clock } from 'lucide-react';
 
-const MOCK_HISTORY = [
-    { url: 'brave.com', time: '10:42 AM', date: 'Today', score: 0.05 },
-    { url: 'accounts.google.co.in', time: '10:15 AM', date: 'Today', score: 0.12 },
-    { url: 'payment-update-urgent.com', time: '09:30 AM', date: 'Today', score: 0.92 },
-    { url: 'github.com', time: 'Yesterday', date: 'Yesterday', score: 0.01 },
-];
+interface HistoryItem {
+    url: string;
+    time: string;
+    date: string;
+    score: number;
+    timestamp: number;
+}
 
 export function ActivityTimeline({ limit = 10 }: { limit?: number }) {
-  const history = MOCK_HISTORY.slice(0, limit);
+  const [history, setHistory] = React.useState<HistoryItem[]>([]);
+
+  React.useEffect(() => {
+    if (chrome?.storage) {
+        chrome.storage.local.get(null, (items) => {
+            const parsed = Object.entries(items)
+                .map(([key, val]: [string, any]) => {
+                    if (!val?.timestamp || !val?.max_risk_score) return null;
+                    const date = new Date(val.timestamp);
+                    return {
+                        url: key,
+                        score: val.max_risk_score,
+                        timestamp: val.timestamp,
+                        time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        date: date.toLocaleDateString() === new Date().toLocaleDateString() ? 'Today' : date.toLocaleDateString()
+                    };
+                })
+                .filter(Boolean) as HistoryItem[];
+            
+            setHistory(parsed.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit));
+        });
+    } else {
+        // Fallback for dev
+        setHistory(MOCK_HISTORY); 
+    }
+  }, [limit]);
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
