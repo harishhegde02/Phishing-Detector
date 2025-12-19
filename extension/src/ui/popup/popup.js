@@ -1,0 +1,1 @@
+import{c as t,j as e,R as s,D as a,C as o,A as r}from"../assets/index.js";t.createRoot(document.getElementById("root")).render(e.jsx(s.StrictMode,{children:e.jsxs("div",{className:"flex flex-col h-full bg-background text-foreground",children:[e.jsx(a,{compact:!0}),e.jsxs("main",{className:"flex-1 overflow-y-auto p-4 space-y-4",children:[e.jsx(o,{}),e.jsx(r,{limit:3})]})]})}));
