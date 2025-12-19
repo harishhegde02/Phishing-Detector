@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import analysis
+from app.routes import analysis, events
 
 app = FastAPI(
     title="Social Engineering Detection API",
@@ -17,6 +17,7 @@ app.add_middleware(
 )
 
 app.include_router(analysis.router)
+app.include_router(events.router)
 
 @app.get("/health")
 async def health_check():

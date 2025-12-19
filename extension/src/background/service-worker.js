@@ -42,7 +42,9 @@ async function handleRiskCheck(payload, sendResponse) {
         console.log("[SecureSentinel] API Success:", data.max_risk_score);
         
         if (sanitizedUrl) {
-            await chrome.storage.local.set({ [sanitizedUrl]: data });
+            await chrome.storage.local.set({ 
+                [sanitizedUrl]: { ...data, timestamp: Date.now() } 
+            });
         }
 
         sendResponse({ success: true, data });
