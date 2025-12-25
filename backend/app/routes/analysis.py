@@ -1,5 +1,7 @@
 from sqlalchemy.orm import Session
 from app.database import get_db
+from app.database import get_db
+from app import models
 from app.models import ScanResult
 from urllib.parse import urlparse
 
@@ -20,6 +22,37 @@ def get_risk_level(score: float) -> RiskLevel:
         return RiskLevel.SUSPICIOUS
     return RiskLevel.SAFE
 
+from pydantic import BaseModel
+
+class BlockRequest(BaseModel):
+    domain: str
+
+@router.post("/block")
+async def block_domain(request: BlockRequest, db: Session = Depends(get_db)):
+    try:
+        # Check if already blocked
+        exists = db.query(models.BlockedDomain).filter(models.BlockedDomain.domain == request.domain).first()
+        if not exists:
+            blocked = models.BlockedDomain(domain=request.domain)
+            db.add(blocked)
+            db.commit()
+            return {"status": "success", "message": f"Domain {request.domain} blocked permanently."}
+        return {"status": "skipped", "message": "Domain already blocked."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/unblock")
+async def unblock_domain(request: BlockRequest, db: Session = Depends(get_db)):
+    try:
+        blocked = db.query(models.BlockedDomain).filter(models.BlockedDomain.domain == request.domain).first()
+        if blocked:
+            db.delete(blocked)
+            db.commit()
+            return {"status": "success", "message": f"Domain {request.domain} unblocked."}
+        return {"status": "skipped", "message": "Domain not found in blocklist."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/analyze", response_model=AnalysisResponse)
 async def analyze_message(
     request: AnalysisRequest, 
@@ -27,6 +60,27 @@ async def analyze_message(
     db: Session = Depends(get_db)
 ):
     try:
+        # 0. BLOCKLIST CHECK (Overriding everything)
+        if request.url:
+            try:
+                parsed = urlparse(request.url)
+                domain = parsed.netloc
+                if domain:
+                    # Check for exact match or subdomain match
+                    # We query all blocked domains to check (optimized in prod with specific queries, but fine here)
+                    blocked_list = db.query(models.BlockedDomain).all()
+                    for blocked_entry in blocked_list:
+                         if domain == blocked_entry.domain or domain.endswith("." + blocked_entry.domain):
+                             return AnalysisResponse(
+                                max_risk_score=1.0,
+                                risk_level=RiskLevel.HIGH_RISK,
+                                detections={},
+                                explanation=f"Access denied. '{blocked_entry.domain}' is in your permanent blocklist.",
+                                request_id=str(uuid.uuid4())
+                            )
+            except:
+                pass
+
         # Note: We do NOT persist request.text or request.url
         results = service.analyze_text(request.text)
         

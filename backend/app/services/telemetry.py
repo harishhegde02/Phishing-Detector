@@ -56,5 +56,6 @@ def generate_shadow_telemetry():
             time.sleep(10)
 
 def start_telemetry_engine():
-    thread = threading.Thread(target=generate_shadow_telemetry, daemon=True)
-    thread.start()
+    # Disabled to allow real user data only
+    print("Shadow Telemetry Generator: Disabled by user request.")
+    pass

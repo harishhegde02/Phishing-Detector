@@ -8,6 +8,23 @@ console.log("[SecureSentinel] Content script active on:", window.location.href);
 const startTime = Date.now();
 let firstInteractionDone = false;
 
+// 0. Active Page Guard (Block Immediately)
+chrome.runtime.sendMessage({
+    type: "CHECK_RISK",
+    payload: { url: window.location.href, skip_cache: true }
+}, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response && response.success) {
+        if (response.data.max_risk_score >= 0.9) { // Block Threshold
+            // Redirect to safe warning page
+            const reason = response.data.explanation || "Malicious content detected by SecureSentinel.";
+            const blockedUrl = `http://localhost:3000/blocked?domain=${encodeURIComponent(window.location.hostname)}&reason=${encodeURIComponent(reason)}`;
+            
+            window.location.replace(blockedUrl);
+        }
+    }
+});
+
 /**
  * Signal Collection: Detect interactions and anomalies
  */

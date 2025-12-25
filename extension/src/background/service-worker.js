@@ -17,8 +17,8 @@ async function handleRiskCheck(payload, sendResponse) {
     const sanitizedUrl = url ? sanitizeURL(url) : null;
     const hostname = url ? new URL(url).hostname : null;
     
-    // 1. Check Cache
-    if (sanitizedUrl) {
+    // 1. Check Cache (unless skipped)
+    if (sanitizedUrl && !payload.skip_cache) {
          const cached = await chrome.storage.local.get(sanitizedUrl);
          if (cached[sanitizedUrl]) {
              sendResponse({ success: true, data: cached[sanitizedUrl] });
