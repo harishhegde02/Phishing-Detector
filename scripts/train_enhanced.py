@@ -3,6 +3,7 @@ import numpy as np
 import joblib
 import os
 import re
+from scipy.sparse import hstack, csr_matrix
 from sklearn.linear_model import SGDClassifier
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.feature_extraction.text import HashingVectorizer
@@ -32,13 +33,48 @@ DATASETS = [
     }
 ]
 
-# Initialize Model (Incremental Multi-Label Learning)
-# MultiOutputClassifier fits one classifier per target. 
-# SGDClassifier supports partial_fit.
-print("🔧 Initializing Enhanced Model (SGD + Hashing)...")
+# Feature Engineering
+def extract_manual_features(urls):
+    """
+    Extracts dense features from a list of URLs.
+    Returns a sparse matrix (csr_matrix) of shape (n_samples, n_features).
+    """
+    features = []
+    
+    # Regex for IP address
+    ip_pattern = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
+    
+    for url in urls:
+        if not isinstance(url, str):
+            url = ""
+            
+        row = []
+        
+        # 1. Has IP Address (Phishing sites often use raw IPs)
+        row.append(1 if ip_pattern.search(url) else 0)
+        
+        # 2. Length Features (Long URLs are suspicious)
+        row.append(1 if len(url) > 50 else 0)
+        row.append(1 if len(url) > 75 else 0)
+        
+        # 3. Suspicious Characters
+        row.append(url.count('.'))   # Dot count (subdomain chaining)
+        row.append(url.count('@'))   # @ symbol (obfuscation)
+        row.append(url.count('-'))   # Hyphens (often used in fake domains)
+        
+        # 4. Sensitive Keywords (Explicit count)
+        lower_url = url.lower()
+        for word in ['login', 'signin', 'account', 'update', 'verify', 'secure', 'bank', 'confirm']:
+            row.append(1 if word in lower_url else 0)
+            
+        features.append(row)
+        
+    return csr_matrix(features)
 
-# Feature Hashing (Stateless, Fixed Dimension)
-# n_features=2**18 (262k) is usually enough for URL tokens, 2**20 (1M) is safer for big data
+# Initialize Model (Incremental Multi-Label Learning)
+print("🔧 Initializing Enhanced Model v3 (SGD + Hashing + Manual Features)...")
+
+# Feature Hashing
 vectorizer = HashingVectorizer(
     n_features=2**20, 
     alternate_sign=False, 
@@ -47,9 +83,9 @@ vectorizer = HashingVectorizer(
 )
 
 # Multi-Output SGD
-# class_weight={0:1, 1:10} manually sets a 10x penalty for missed phishing sites (Stable fix)
+# Removed manual weights: Smart Features (IP, Keywords) provide enough signal natureally.
 clf = MultiOutputClassifier(
-    SGDClassifier(loss='log_loss', penalty='l2', alpha=1e-4, random_state=42, max_iter=1000, tol=1e-3, class_weight={0: 1, 1: 10}),
+    SGDClassifier(loss='log_loss', penalty='l2', alpha=1e-4, random_state=42, max_iter=1000, tol=1e-3),
     n_jobs=1
 )
 
@@ -57,7 +93,6 @@ def clean_url(url):
     if not isinstance(url, str):
         return ""
     url = url.lower()
-    # Remove common prefixes to focus on the domain and path patterns
     for prefix in ['https://', 'http://', 'www.']:
         if url.startswith(prefix):
             url = url[len(prefix):]
@@ -66,7 +101,7 @@ def clean_url(url):
 print(f"🚀 Starting Training on ~1.1 Million Samples...")
 start_time = datetime.now()
 total_samples = 0
-classes = [np.array([0, 1])] * 4 # 4 labels, each binary (0 or 1)
+classes = [np.array([0, 1])] * 4 
 
 for ds in DATASETS:
     path = ds['path']
@@ -76,32 +111,31 @@ for ds in DATASETS:
         
     print(f"\n📂 Loading {os.path.basename(path)}...")
     
-    # Process in chunks
     chunk_iter = pd.read_csv(path, chunksize=CHUNK_SIZE)
     
     for i, chunk in enumerate(chunk_iter):
         # 1. Prepare X
-        # Normalize URL column name
         if ds['url_col'] != 'url':
             chunk = chunk.rename(columns={ds['url_col']: 'url'})
             
-        # Clean URLs
         chunk['url'] = chunk['url'].apply(clean_url)
         
-        # Vectorize
-        X_vec = vectorizer.transform(chunk['url'])
+        # Feature Extraction
+        X_vec = vectorizer.transform(chunk['url'])       # Hashing Features (Sparse)
+        X_manual = extract_manual_features(chunk['url']) # Manual Features (Sparse)
         
-        # 2. Prepare Y (4 columns)
-        # Handle non-numeric or missing data gracefully
+        # Combine Features
+        X_combined = hstack([X_vec, X_manual])
+        
+        # 2. Prepare Y
         try:
-            # Force numeric, coerce errors to NaN, then fill 0
             Y = chunk[ds['labels']].apply(pd.to_numeric, errors='coerce').fillna(0).astype(int)
         except Exception as e:
             print(f"   ⚠️ Skipping chunk {i+1} due to bad data: {e}")
             continue
         
         # 3. Incremental Train
-        clf.partial_fit(X_vec, Y, classes=classes)
+        clf.partial_fit(X_combined, Y, classes=classes)
         
         total_samples += len(chunk)
         print(f"   ✓ Processed chunk {i+1} ({len(chunk)} rows) - Total: {total_samples}")
@@ -114,3 +148,4 @@ print("💾 Saving models...")
 joblib.dump(clf, os.path.join(MODELS_DIR, 'model_enhanced.joblib'))
 joblib.dump(vectorizer, os.path.join(MODELS_DIR, 'vectorizer_enhanced.joblib'))
 print("🎉 Done! New 'model_enhanced.joblib' is ready.")
+

@@ -67,6 +67,46 @@ def clean_url(url):
             url = url[len(prefix):]
     return url
 
+from scipy.sparse import hstack, csr_matrix
+import re
+
+def extract_manual_features(urls):
+    """
+    Extracts dense features from a list of URLs.
+    Compatible with the training script logic.
+    """
+    features = []
+    
+    # Regex for IP address
+    ip_pattern = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
+    
+    for url in urls:
+        if not isinstance(url, str):
+            url = ""
+            
+        row = []
+        
+        # 1. Has IP Address
+        row.append(1 if ip_pattern.search(url) else 0)
+        
+        # 2. Length Features
+        row.append(1 if len(url) > 50 else 0)
+        row.append(1 if len(url) > 75 else 0)
+        
+        # 3. Suspicious Characters
+        row.append(url.count('.'))   
+        row.append(url.count('@'))   
+        row.append(url.count('-'))   
+        
+        # 4. Sensitive Keywords
+        lower_url = url.lower()
+        for word in ['login', 'signin', 'account', 'update', 'verify', 'secure', 'bank', 'confirm']:
+            row.append(1 if word in lower_url else 0)
+            
+        features.append(row)
+        
+    return csr_matrix(features)
+
 class DetectionRequest(BaseModel):
     text: str
 
@@ -151,13 +191,19 @@ async def detect_attack(request: DetectionRequest):
 
         # Clean and Vectorize input
         clean_text = clean_url(text)
-        X_vec = vectorizer.transform([clean_text])
+        
+        # Feature Extraction
+        X_vec = vectorizer.transform([clean_text])       # Hashing Features
+        X_manual = extract_manual_features([clean_text]) # Manual Features
+        
+        # Combine Features
+        X_combined = hstack([X_vec, X_manual])
         
         # Get probabilities
         try:
             # MultiOutputClassifier returns a LIST of arrays (one per label)
             # Each array is (n_samples, n_classes) -> (1, 2)
-            raw_probs = clf.predict_proba(X_vec)
+            raw_probs = clf.predict_proba(X_combined)
             
             # Extract probability of class "1" (Positive) for each label
             probs = []
