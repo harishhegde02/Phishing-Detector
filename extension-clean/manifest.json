@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "SecureSentinel",
+  "version": "2.1.0",
+  "description": "Real-time phishing and social engineering detection for search results",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "SecureSentinel - Click to view stats"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.google.com/search*",
+        "https://www.google.com/search*",
+        "https://search.brave.com/*"
+      ],
+      "js": ["src/content/content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

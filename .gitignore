@@ -31,3 +31,8 @@ dist
 build
 .next
 out
+
+
+data/processed/
+ext_data/
+models/
