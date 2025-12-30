@@ -501,6 +501,14 @@ async def get_activity_log(limit: int = 50):
 # Include the router in the main app
 app.include_router(router)
 
+# Include AI Chat Router
+try:
+    from app.routes.chat import router as chat_router
+    app.include_router(chat_router)
+    print("AI Chat Router registered successfully.")
+except ImportError as e:
+    print(f"Warning: Could not import chat router. Ensure 'backend' is in your PYTHONPATH. Error: {e}")
+
 # --- DIRECT BLOCKING ENDPOINTS (To fix 404 issue) ---
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session

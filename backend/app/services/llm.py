@@ -34,14 +34,9 @@ class LlmService:
             
         self.model = None
         # Refined list based on confirmed identifiers from user's list_models()
+        # Specifically avoiding gemini-2.5 models which have zero-quota for free tier
         self.model_names = [
-            'models/gemini-2.0-flash-lite',
-            'models/gemini-2.0-flash',
-            'models/gemini-flash-latest',
-            'models/gemini-pro-latest',
-            'models/gemini-2.0-flash-exp',
-            'models/gemini-1.5-flash',
-            'models/gemini-1.5-flash-latest'
+            'models/gemini-flash-latest' # Confirmed valid from silent_models.txt
         ]
         
         if not self.api_key:
@@ -60,7 +55,7 @@ class LlmService:
         # We just pick the first one to satisfy the initialization check
         # The real rotation happens in chat_with_context
         self.model = genai.GenerativeModel(self.model_names[0])
-        print(f"[LlmService] Default model set to {self.model_names[0]}")
+        print(f"[LlmService] Default model set to {self.model_names[0]} (Reloaded)")
 
     async def chat_with_context(self, message: str, context: str) -> Dict[str, Any]:
         if not self.api_key:
@@ -73,7 +68,7 @@ class LlmService:
             "You are Sentinel AI, a high-level Cybersecurity Strategist and protective digital guardian. "
             "You are embedded in the SecureSentinel dashboard. Your tone is professional, authoritative, but helpful.\n\n"
             "CONTEXT OF CURRENT PAGE:\n"
-            f"'''{context[:3000]}'''\n\n"
+            f"'''{context[:1500]}'''\n\n"
             "USER QUESTION:\n"
             f"{message}\n\n"
             "INSTRUCTIONS:\n"
@@ -124,9 +119,11 @@ class LlmService:
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = str(e)
-                print(f"[LlmService] {model_name} failed: {err_str[:150]}...")
+                print(f"[LlmService] ❌ {model_name} failed: {last_error}")
                 
-                if any(x in err_str for x in ["429", "quota", "404", "not found", "403", "permission"]):
+                if any(x in err_str for x in ["429", "quota", "500", "not found", "403", "permission"]):
+                    import time
+                    time.sleep(1) # Nano-backoff before trying next model
                     continue
                 
                 return {
@@ -135,8 +132,8 @@ class LlmService:
                 }
         
         return {
-            "response": f"I've exhausted all available AI models for this key. Last error: {last_error}. This usually happens when the free tier quota is depleted or the key is restricted.",
-            "suggestions": ["Try Newer Key", "Wait 1 Hour"]
+            "response": f"The AI engine encountered a persistent issue with the current API key. Last error: {last_error}. \n\n**Common causes:**\n- `403`: API key is unauthorized (check AI Studio permissions).\n- `429`: Free tier quota reached (wait 60 seconds).\n- `404`: Model name mismatch.",
+            "suggestions": ["Verify API Key", "Retry in 60s"]
         }
 
     def _generate_suggestions(self, response_text: str) -> List[str]:
