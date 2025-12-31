@@ -82,7 +82,7 @@ async function handleScan() {
 
 async function checkBackendStatus() {
     try {
-        const response = await fetch('http://127.0.0.1:8000/health');
+        const response = await fetch('http://127.0.0.1:8002/health');
         const dot = document.querySelector('.dot');
         if (response.ok) {
             dot.style.backgroundColor = '#f4f4f5'; // White/Active

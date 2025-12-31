@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
@@ -10,6 +10,10 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Add current directory (backend) to path to ensure 'app' module can be imported
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from sqlalchemy.orm import Session
+from app.database import get_db, SessionLocal
+from app import models
 
 app = FastAPI(title="Social Engineering Detection API")
 
@@ -131,7 +135,7 @@ router = APIRouter(prefix="/api/v1")
 recent_scans = []
 
 @router.post("/detect", response_model=DetectionResponse)
-async def detect_attack(request: DetectionRequest):
+async def detect_attack(request: DetectionRequest, db: Session = Depends(get_db)):
     global recent_scans # Access global list
     import traceback
     from datetime import datetime
@@ -248,6 +252,68 @@ async def detect_attack(request: DetectionRequest):
                     "impersonation": {"probability": 0.0, "top_features": []}
                 }
             }
+
+        # --- HEURISTIC RISK BOOSTING (FIX FOR MISSING RED BADGES) ---
+        risky_keywords = [
+            'tamilrockers', 'moviesda', 'torrent', 'crack', 'pirate', 'free movie', 'full movie', 
+            'download-free', 'tamilyogi', 'isaimini', 'kuttymovies', 'movierulz', '123movies', 
+            'fmovies', 'putlocker', '1tamilmv', 'tamilgun'
+        ]
+        risky_tlds = [
+            '.care', '.top', '.best', '.win', '.bid', '.date', '.tk', '.ml', '.ga', 
+            '.xyz', '.stream', '.movie', '.vip'
+        ]
+        
+        heuristic_score = 0.0
+        heuristic_label = None
+        
+        # Check for highly dangerous keywords (PIRACY/SCAMS)
+        if any(kw in text.lower() for kw in risky_keywords):
+            heuristic_score = 0.95 # Guaranteed RED
+            heuristic_label = "impersonation"
+            print(f"🚩 HEURISTIC MATCH (Piracy): {text}")
+            
+        # Check for suspicious tools / bypass (Moderate/Yellow)
+        elif any(kw in text.lower() for kw in ['unscramble', 'bypass', 'unblock', 'proxy', 'solver', 'generator', 'keygene']):
+            heuristic_score = 0.65 # Guaranteed YELLOW
+            heuristic_label = "authority"
+            print(f"🚩 HEURISTIC MATCH (Suspicious Tool): {text}")
+
+        # Check for suspicious TLDs
+        elif any(text.lower().endswith(tld) or (tld + "/") in text.lower() for tld in risky_tlds):
+            heuristic_score = 0.85 # High Risk
+            heuristic_label = "authority"
+            print(f"🚩 HEURISTIC MATCH (TLD): {text}")
+
+        # If heuristic match found, return immediately to bypass ML uncertainty
+        if heuristic_score > 0:
+             # Prepare results with boosted score
+             results_labels = {l: {"probability": 0.0, "top_features": []} for l in labels}
+             if heuristic_label:
+                 results_labels[heuristic_label] = {"probability": heuristic_score, "top_features": [{"word": "HEURISTIC_OVERRIDE", "weight": 1.0}]}
+             
+             # PERSIST TO DB (Copy of logic from below)
+             try:
+                 db = SessionLocal()
+                 db_scan = models.ScanResult(
+                    url=text,
+                    domain=text.split('/')[2] if '//' in text else text,
+                    risk_score=heuristic_score,
+                    risk_level="HIGH_RISK",
+                    explanation=f"Heuristic Flag: Risky pattern detected in URL structure.",
+                    timestamp=datetime.now()
+                 )
+                 db.add(db_scan)
+                 db.commit()
+                 db.close()
+             except: pass
+
+             return {
+                "text": text,
+                "max_risk_score": heuristic_score,
+                "labels": results_labels
+             }
+        # --- END HEURISTIC BOOSTING ---
 
         # CHECK DATABASE BLOCKLIST (Immediate enforcement)
         try:
@@ -384,122 +450,40 @@ async def detect_attack(request: DetectionRequest):
         import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+         # PERSIST TO DATABASE (Fix for "Dashboard shows nothing")
+        try:
+            # We already calculated these variables, re-use them
+            # max_prob, display_type, explanation...
+            
+            # Re-derive Risk Level string
+            r_level = "SAFE"
+            if max_prob > 0.8: r_level = "HIGH_RISK"
+            elif max_prob > 0.5: r_level = "SUSPICIOUS"
+            
+            # Simple explanation if not defined
+            expl = f"Detected as {display_type}"
+            
+            db_scan = models.ScanResult(
+                url=text, # or hostname if you prefer
+                domain=hostname,
+                risk_score=max_prob,
+                risk_level=r_level,
+                explanation=expl,
+                timestamp=datetime.now()
+            )
+            db.add(db_scan)
+            db.commit()
+            print(f"✅ Persisted scan to DB: {hostname}")
+        except Exception as db_e:
+            print(f"❌ Failed to persist scan to DB: {db_e}")
 
 
-@router.get("/dashboard")
-async def get_dashboard_stats():
-    from datetime import datetime, timedelta
-    
-    # Dynamic Stats from recent_scans
-    total_blocked = sum(1 for s in recent_scans if s['risk_score'] > 0.5)
-    total_scans = len(recent_scans) + 14205  # Session + legacy baseline
-    
-    # Generate 7-day activity trend (mock for now, could be real if we track timestamps)
-    activity_trend = []
-    for i in range(7):
-        date = (datetime.now() - timedelta(days=6-i)).strftime("%Y-%m-%d")
-        # Count scans from that day (simplified - just distribute recent_scans)
-        count = len([s for s in recent_scans if s['timestamp'].startswith(date)]) if recent_scans else 0
-        activity_trend.append({"date": date, "count": count + (50 - i*5)})  # Add baseline
-    
-    # Format recent_interventions with risk field
-    formatted_interventions = []
-    for scan in (recent_scans[:20] if recent_scans else []):
-        risk_level = "HIGH" if scan['risk_score'] > 0.8 else ("MODERATE" if scan['risk_score'] > 0.5 else "LOW")
-        formatted_interventions.append({
-            "domain": scan['domain'],
-            "type": scan['type'],
-            "timestamp": scan['timestamp'],
-            "risk": risk_level,
-            "score": scan['risk_score']
-        })
-    
-    if not formatted_interventions:
-        formatted_interventions = [{
-            "domain": "System Initialized - Waiting for traffic...",
-            "type": "Secure",
-            "timestamp": datetime.now().isoformat(),
-            "risk": "SAFE",
-            "score": 0.0
-        }]
-    
-    return {
-        "kpi": {
-            "total_scans": total_scans,
-            "threats_blocked": 14205 + total_blocked,
-            "critical_blocked": sum(1 for s in recent_scans if s['risk_score'] > 0.8),
-            "safety_score": 99.9
-        },
-        "recent_interventions": formatted_interventions,
-        "activity_trend": activity_trend
-    }
-
-@router.get("/activity")
-async def get_activity_log(limit: int = 50):
-    """
-    Returns detailed activity log for the Activity Insights page
-    """
-    from datetime import datetime
-    
-    # Convert recent_scans to detailed activity format
-    activity_items = []
-    seen_ids = set()
-    for idx, scan in enumerate(recent_scans[:limit]):
-        risk_score = scan['risk_score']
-        
-        # Determine risk level
-        if risk_score > 0.8:
-            risk_level = "HIGH"
-            status = "BLOCKED"
-        elif risk_score > 0.5:
-            risk_level = "MODERATE"
-            status = "FLAGGED"
-        else:
-            risk_level = "LOW"
-            status = "SAFE"
-        
-        # Determine category based on type
-        category_map = {
-            "Phishing": "Phishing",
-            "Social Eng.": "Social Engineering",
-            "Suspicious": "Suspicious",
-            "Clean": "Safe"
-        }
-        category = category_map.get(scan['type'], "Unknown")
-        
-        # Deduplicate IDs to prevent React keys error
-        item_id = scan.get("id", idx + 10000)
-        
-        # Ensure ID is unique in valid list
-        original_id = item_id
-        dup_count = 1
-        while item_id in seen_ids:
-            item_id = f"{original_id}_{dup_count}"
-            dup_count += 1
-        seen_ids.add(item_id)
-
-        activity_items.append({
-            "id": item_id,
-            "hostname": scan.get("hostname", scan['domain']), # Use specific hostname or fallback to display domain
-            "domain": scan['domain'],
-            "timestamp": scan['timestamp'],
-            "risk_score": risk_score,
-            "risk_level": risk_level,
-            "status": status,
-            "category": category,
-            "explanation": f"Risk score: {risk_score:.2f}. Detected as {scan['type']}.",
-            "is_blocked": risk_score > 0.8
-        })
-    
-    
-    # Return empty list if no scans (Don't show bluff data)
-    if not activity_items:
-        return []
-    
-    return activity_items
-
-# Include the router in the main app
+# Include routers
+from app.routes import stats
+app.include_router(stats.router)
 app.include_router(router)
+
 
 # Include AI Chat Router
 try:

@@ -3,12 +3,13 @@
  * Real-time blocking enabled
  */
 
-const API_BASE = "http://127.0.0.1:8000/api/v1";
+const API_BASE = "http://127.0.0.1:8002/api/v1";
 console.log("[SecureSentinel] Service Worker v3.0 - Build: 2025-12-30");
 
 // Cache for analyzed URLs
 const cache = new Map();
 const CACHE_DURATION = 3600000; // 1 hour
+const MAX_CACHE_SIZE = 100; // Limit cache to 100 entries to prevent memory leak
 
 // Temporary whitelist (session only)
 const tempWhitelist = new Set();
@@ -102,7 +103,7 @@ async function getSettings() {
  */
 async function checkBackend() {
     try {
-        const res = await fetch("http://127.0.0.1:8000/health", {
+        const res = await fetch("http://127.0.0.1:8002/health", {
             method: "GET",
             cache: "no-cache"
         });
@@ -159,8 +160,8 @@ async function analyzeURL(url, isMainFrame = false) {
             timestamp: Date.now()
         });
 
-        // Limit cache size
-        if (cache.size > 200) {
+        // Limit cache size to prevent memory leak
+        if (cache.size > MAX_CACHE_SIZE) {
             const firstKey = cache.keys().next().value;
             cache.delete(firstKey);
         }

@@ -184,19 +184,34 @@ function addBadge(link, data) {
     container.appendChild(badge);
     document.body.appendChild(popup);
     
-    // Find best injection point - try h3 first, then h2, then parent
-    const title = link.querySelector("h3") || link.querySelector("h2") || link.querySelector("[class*='title']");
+    // Find best injection point
+    // 1. Common Search Result headers (h3, h2)
+    // 2. Class-based headers (specific to search engines)
+    // 3. Nested spans within headers (often used by Brave/Google)
+    // 4. Fallback to the link itself
+    const title = link.querySelector("h3") || 
+                  link.querySelector("h2") || 
+                  link.querySelector("[class*='title']") ||
+                  link.closest("h3") || // Case where the <a> is inside the <h3>
+                  link.closest("h2") ||
+                  link.closest(".g")?.querySelector("h3") || // Google Search
+                  link.closest(".result")?.querySelector(".result-title") || // Generic
+                  link.querySelector("span"); // Use first span in link if exists
+                  
     if (title) {
-        title.appendChild(container);
+        // Find the deepest text node or span to append next to
+        const target = title.querySelector("span:last-child") || title;
+        target.appendChild(container);
     } else {
+        // If no title found inside link, try to insert at end of link text
         link.appendChild(container);
     }
     
-    console.log(`[SecureSentinel] Badge added: ${Math.round(score * 100)}%`);
+    console.log(`[SecureSentinel] Badge added for: ${link.href} (${Math.round(score * 100)}%)`);
 }
 
 /**
- * Scan link and add badge
+ * Scan link and add badge with retry logic
  */
 async function scanLink(link) {
     const url = link.href;
@@ -216,6 +231,12 @@ async function scanLink(link) {
         
         if (response && response.success && response.data) {
             addBadge(link, response.data);
+        } else if (!response || !response.success) {
+            // Retry once after 2 seconds if message failed
+            setTimeout(async () => {
+                const retry = await chrome.runtime.sendMessage({ type: "ANALYZE_URL", url: url });
+                if (retry && retry.success && retry.data) addBadge(link, retry.data);
+            }, 2000);
         }
     } catch (error) {
         console.warn("[SecureSentinel] Scan failed:", error.message);
@@ -229,7 +250,8 @@ function scanAllLinks() {
     const links = document.querySelectorAll('a[href^="http"]');
     
     links.forEach((link, index) => {
-        setTimeout(() => scanLink(link), index * 100);
+        // Spread scans to avoid overhead
+        setTimeout(() => scanLink(link), index * 50);
     });
 }
 
@@ -240,48 +262,16 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// Initial scans
-setTimeout(() => {
-    // Scan the current page itself first
-    scanLink({ href: window.location.href }, true); 
-    // Then scan links
-    scanAllLinks();
-}, 500);
-
+// Initial scans - Aggressive start
+setTimeout(scanAllLinks, 500);
 setTimeout(scanAllLinks, 2000);
+setTimeout(scanAllLinks, 5000);
 
-/**
- * Scan link and add badge
- * @param {Object} link - Link element or object with href
- * @param {boolean} isMainFrame - Whether this is the main page URL
- */
-async function scanLink(link, isMainFrame = false) {
-    const url = link.href;
-    
-    // Skip if invalid or local (unless it's the main frame we want to check)
-    if (!url || (processed.has(url) && !isMainFrame)) return;
-    if (url.includes("localhost") || url.includes("127.0.0.1")) return;
-    
-    processed.add(url);
-    
-    try {
-        const response = await chrome.runtime.sendMessage({
-            type: "ANALYZE_URL",
-            url: url,
-            isMainFrame: isMainFrame
-        });
-        
-        // Only add badge for actual link elements (not main frame)
-        if (!isMainFrame && response && response.success && response.data) {
-            addBadge(link, response.data);
-        }
-    } catch (error) {
-        // Silent fail
-    }
-}
+// Mutation observer for dynamic content (infinite scroll)
+let scanTimeout;
 const observer = new MutationObserver(() => {
-    clearTimeout(window.sentinelTimer);
-    window.sentinelTimer = setTimeout(scanAllLinks, 300);
+    clearTimeout(scanTimeout);
+    scanTimeout = setTimeout(scanAllLinks, 1000);
 });
 
 observer.observe(document.body, {

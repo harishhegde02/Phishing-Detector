@@ -11,7 +11,7 @@ class ScanResult(Base):
     risk_score = Column(Float)
     risk_level = Column(String)  # SAFE, SUSPICIOUS, HIGH_RISK
     explanation = Column(String)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 class BlockedDomain(Base):
     __tablename__ = "blocked_domains"
